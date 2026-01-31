@@ -7,17 +7,27 @@ repositories {
 }
 
 dependencies {
-    // JNI bindings for raylib 5.5 (includes platform natives)
+    // JNI bindings for raylib (includes platform natives)
     implementation 'uk.co.electronstudio.jaylib:jaylib:5.5.+'
 }
 
+/*
+  IMPORTANT:
+  - Do NOT force Gradle toolchains here.
+  - Your build will use whatever JDK is running Gradle (JAVA_HOME / PATH).
+  - If your JDK is >= 17, the project will compile targeting Java 17.
+*/
 java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
-    }
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = 17
+    options.encoding = 'UTF-8'
 }
 
 application {
     mainClass = 'manipulator3d.Main'
-    // On macOS you may need to add: -XstartOnFirstThread (see README)
+    // On macOS you may need: -XstartOnFirstThread (see README)
 }

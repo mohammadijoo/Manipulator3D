@@ -9,18 +9,24 @@ import static com.raylib.Raylib.*;
 import static com.raylib.Colors.*;
 import com.raylib.Raylib.*;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import org.bytedeco.javacpp.IntPointer;
 
 /**
  * 3-DOF two-link manipulator simulation:
- * - Prompts for START and GOAL points
- * - Runs a pick-and-place loop with a fixed HOME end-effector position (2,2,2)
- * - Uses analytic IK to command joint angles each frame
+ * - Start/Goal inputs are entered in the UI panel while paused.
+ * - Press PLAY to validate/apply inputs and start the pick-and-place loop.
+ * - Press PAUSE to freeze; edit points; press PLAY to restart from HOME.
+ *
+ * Speed control:
+ * - SIM_SPEED = 1.75f increases motion speed by ~75%.
  */
 public final class Main {
 
+    // Increase motion speed by ~75%
+    private static final float SIM_SPEED = 1.75f;
+
     private enum Phase {
+        Idle,               // waiting for PLAY
         MoveHomeToStart,
         PickAtStart,
         MoveStartToGoal,
@@ -40,9 +46,11 @@ public final class Main {
         return Math.max(lo, Math.min(hi, v));
     }
 
-    private static boolean tryParseVec3(String line, Vec3f out) {
-        if (line == null) return false;
-        String[] parts = line.trim().split("\\s+");
+    private static boolean tryParseVec3Text(String text, Vec3f out) {
+        if (text == null) return false;
+        String t = text.trim();
+        if (t.isEmpty()) return false;
+        String[] parts = t.split("\\s+");
         if (parts.length != 3) return false;
         try {
             float x = Float.parseFloat(parts[0]);
@@ -52,35 +60,6 @@ public final class Main {
             return true;
         } catch (NumberFormatException ex) {
             return false;
-        }
-    }
-
-    private static Vec3f promptVec3(BufferedReader br, String label, Vec3f def) {
-        while (true) {
-            System.out.printf("%s  (format: x y z, z>=0; Enter=default %.3f %.3f %.3f): ",
-                    label, def.x, def.y, def.z);
-
-            String line;
-            try {
-                line = br.readLine();
-            } catch (Exception e) {
-                return new Vec3f(def.x, def.y, def.z);
-            }
-
-            if (line == null || line.trim().isEmpty()) {
-                return new Vec3f(def.x, def.y, def.z);
-            }
-
-            Vec3f v = new Vec3f();
-            if (!tryParseVec3(line, v)) {
-                System.out.println("Invalid format. Example:  1 2 1");
-                continue;
-            }
-            if (v.z < 0.0f) {
-                System.out.println("Invalid input: z must be >= 0");
-                continue;
-            }
-            return v;
         }
     }
 
@@ -94,7 +73,8 @@ public final class Main {
 
         for (String path : candidates) {
             if (FileExists(path)) {
-                Font f = LoadFontEx(path, px, null, 0);
+                // Cast null to select the intended overload and avoid ambiguity
+                Font f = LoadFontEx(path, px, (IntPointer) null, 0);
                 if (f.texture().id() != 0) {
                     SetTextureFilter(f.texture(), TEXTURE_FILTER_BILINEAR);
                     return f;
@@ -145,6 +125,50 @@ public final class Main {
         return new Vector3().x(x).y(y).z(z);
     }
 
+    private static void restartFromHome(
+            RobotArm arm,
+            Vec3f homeEE,
+            Vec3f start,
+            Vec3f goal,
+            JointAngles qcmd,
+            LinearTrajectory traj,
+            float moveHomeToStart,
+            Holder<Phase> phase,
+            Holder<Float> timer,
+            Holder<BallState> ballState,
+            Vec3f targetEE,
+            Holder<String> runtimeError
+    ) {
+        runtimeError.value = null;
+
+        IKResult ikHome  = arm.solveIK(homeEE, false);
+        IKResult ikStart = arm.solveIK(start,  false);
+        IKResult ikGoal  = arm.solveIK(goal,   false);
+
+        if (!ikHome.reachable || !ikStart.reachable || !ikGoal.reachable) {
+            phase.value = Phase.Error;
+            if (!ikHome.reachable) runtimeError.value = ikHome.message;
+            else if (!ikStart.reachable) runtimeError.value = ikStart.message;
+            else runtimeError.value = ikGoal.message;
+            return;
+        }
+
+        // Arm starts at HOME pose
+        qcmd.set(ikHome.q);
+        targetEE.set(homeEE);
+
+        // Ball starts at START
+        ballState.value = BallState.AtStart;
+
+        // Begin: HOME -> START
+        traj.reset(homeEE, start, moveHomeToStart);
+        phase.value = Phase.MoveHomeToStart;
+        timer.value = 0.0f;
+    }
+
+    /** Minimal mutable holder to avoid lots of single-element arrays. */
+    private static final class Holder<T> { T value; Holder(T v){ value = v; } }
+
     public static void main(String[] args) throws Exception {
         SetTraceLogLevel(LOG_ERROR);
         SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT);
@@ -162,7 +186,7 @@ public final class Main {
 
         RobotArm arm = new RobotArm(link1, link2);
 
-        // Defaults
+        // Active targets (used by simulation)
         Vec3f start = new Vec3f(1, 2, 1);
         Vec3f goal  = new Vec3f(2, 3, 2);
 
@@ -170,37 +194,12 @@ public final class Main {
         final Vec3f homeEE = new Vec3f(2.0f, 2.0f, 2.0f);
 
         System.out.println("Manipulator3D IK Pick&Place");
-        System.out.println("INPUT FORMAT: x y z  (three numbers separated by spaces)");
-        System.out.println("Example:  1 2 1");
+        System.out.println("Inputs are entered in the UI panel while paused.");
         System.out.println("Axis rule: z must be >= 0 ; x and y can be negative.");
         System.out.printf ("Workspace: |p| in [%.3f, %.3f] meters%n", arm.minReach(), arm.maxReach());
-        System.out.println("Fixed EE HOME position: (2 2 2)
-");
+        System.out.println("Fixed EE HOME position: (2 2 2)\n");
 
-        BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
-        start = promptVec3(br, "Enter START", start);
-        goal  = promptVec3(br, "Enter GOAL ", goal);
-
-        // Validate endpoints + home
-        IKResult ikHome  = arm.solveIK(homeEE, false);
-        IKResult ikStart = arm.solveIK(start,  false);
-        IKResult ikGoal  = arm.solveIK(goal,   false);
-
-        System.out.println("\nUsing:");
-        System.out.printf ("  HOME  = (%.3f, %.3f, %.3f) -> %s%n",
-                homeEE.x, homeEE.y, homeEE.z, ikHome.reachable ? "reachable" : "NOT reachable");
-        if (!ikHome.reachable) System.out.println("    reason: " + ikHome.message);
-
-        System.out.printf ("  START = (%.3f, %.3f, %.3f) -> %s%n",
-                start.x, start.y, start.z, ikStart.reachable ? "reachable" : "NOT reachable");
-        if (!ikStart.reachable) System.out.println("    reason: " + ikStart.message);
-
-        System.out.printf ("  GOAL  = (%.3f, %.3f, %.3f) -> %s%n",
-                goal.x, goal.y, goal.z, ikGoal.reachable ? "reachable" : "NOT reachable");
-        if (!ikGoal.reachable) System.out.println("    reason: " + ikGoal.message);
-        System.out.println();
-
-        InitWindow(1280, 720, "Manipulator3D - 3DOF IK Pick&Place");
+        InitWindow(1280, 720, "Manipulator3D - 3DOF IK Pick&Place (Java)");
         SetWindowMinSize(960, 540);
         SetTargetFPS(60);
 
@@ -215,9 +214,10 @@ public final class Main {
                 .projection(CAMERA_PERSPECTIVE)
                 ._position(v(1.10f * reach, -1.15f * reach, 0.85f * reach));
 
-        boolean paused = false;
+        // Start paused: user enters points in UI, then presses PLAY
+        boolean paused = true;
 
-        // Timing
+        // Timing (base values; SIM_SPEED scales the effective dt)
         final float moveHomeToStart = 2.2f;
         final float pickDuration    = 0.45f;
         final float moveStartToGoal = 2.6f;
@@ -225,12 +225,12 @@ public final class Main {
         final float returnToHome    = 2.0f;
         final float resetWaitTotal  = 1.5f;
 
-        float timer = 0.0f;
+        Holder<Float> timer = new Holder<>(0.0f);
 
         // Ball size
         final float ballRadius = clamp(0.03f * reach, 0.06f, 0.16f);
 
-        BallState ballState = BallState.AtStart;
+        Holder<BallState> ballState = new Holder<>(BallState.AtStart);
         Vec3f ballPos = new Vec3f(start.x, start.y, start.z);
 
         Vec3f targetEE = new Vec3f(homeEE.x, homeEE.y, homeEE.z);
@@ -238,21 +238,17 @@ public final class Main {
 
         LinearTrajectory traj = new LinearTrajectory();
 
-        Phase phase = Phase.MoveHomeToStart;
+        Holder<Phase> phase = new Holder<>(Phase.Idle);
+        Holder<String> runtimeError = new Holder<>(null);
 
-        if (!ikHome.reachable || !ikStart.reachable || !ikGoal.reachable) {
-            phase = Phase.Error;
-        } else {
-            qcmd.set(ikHome.q);
-            targetEE.set(homeEE);
+        // Initialize arm at HOME pose (idle)
+        IKResult ikHomeInit = arm.solveIK(homeEE, false);
+        if (ikHomeInit.reachable) qcmd.set(ikHomeInit.q);
 
-            ballState = BallState.AtStart;
-            ballPos.set(start);
-
-            traj.reset(homeEE, start, moveHomeToStart);
-            phase = Phase.MoveHomeToStart;
-            timer = 0.0f;
-        }
+        // Overlay state (text inputs persist here)
+        Overlay.InputState input = new Overlay.InputState();
+        input.setStartDefault(start);
+        input.setGoalDefault(goal);
 
         // Reusable native vectors for drawing
         Vector3 vOrigin = v(0,0,0);
@@ -269,6 +265,10 @@ public final class Main {
         Vector3 yAxis = v(0, axisLen, 0);
         Vector3 zAxis = v(0, 0, axisLen);
 
+        // Preview vectors while paused (parsed from UI fields)
+        Vec3f pendingStart = new Vec3f(start.x, start.y, start.z);
+        Vec3f pendingGoal  = new Vec3f(goal.x, goal.y, goal.z);
+
         while (!WindowShouldClose()) {
             if (IsKeyPressed(KEY_F11)) ToggleFullscreen();
 
@@ -277,109 +277,130 @@ public final class Main {
 
             updateZoom(cam);
 
-            float dt = paused ? 0.0f : GetFrameTime();
-            String runtimeError = null;
+            // Scale simulation time by SIM_SPEED (~75% faster)
+            float dtRaw = paused ? 0.0f : GetFrameTime();
+            float dtSim = dtRaw * SIM_SPEED;
 
-            if (phase != Phase.Error) {
-                switch (phase) {
+            // While paused, parse pending inputs and compute reachability for UI feedback
+            boolean pendingStartOk = tryParseVec3Text(input.startText.toString(), pendingStart) && pendingStart.z >= 0.0f;
+            boolean pendingGoalOk  = tryParseVec3Text(input.goalText.toString(),  pendingGoal)  && pendingGoal.z  >= 0.0f;
+
+            IKResult ikStartPending = pendingStartOk ? arm.solveIK(pendingStart, false) : IKResult.unreachable("Invalid START: use 'x y z' with z>=0");
+            IKResult ikGoalPending  = pendingGoalOk  ? arm.solveIK(pendingGoal,  false) : IKResult.unreachable("Invalid GOAL: use 'x y z' with z>=0");
+
+            // Simulation update
+            if (phase.value != Phase.Error && !paused) {
+                switch (phase.value) {
+                    case Idle -> {
+                        // Should not happen while running, but safe
+                        phase.value = Phase.MoveHomeToStart;
+                    }
+
                     case MoveHomeToStart -> {
-                        ballState = BallState.AtStart;
+                        ballState.value = BallState.AtStart;
                         ballPos.set(start);
 
-                        traj.update(dt);
+                        traj.update(dtSim);
                         targetEE = traj.position();
 
                         if (traj.finished()) {
-                            phase = Phase.PickAtStart;
-                            timer = 0.0f;
+                            phase.value = Phase.PickAtStart;
+                            timer.value = 0.0f;
                             targetEE.set(start);
                         }
                     }
+
                     case PickAtStart -> {
                         targetEE.set(start);
-                        ballState = BallState.AtStart;
+                        ballState.value = BallState.AtStart;
                         ballPos.set(start);
 
-                        timer += dt;
-                        if (timer >= pickDuration) {
-                            ballState = BallState.Attached;
-                            timer = 0.0f;
+                        timer.value += dtSim;
+                        if (timer.value >= pickDuration) {
+                            ballState.value = BallState.Attached;
+                            timer.value = 0.0f;
                             traj.reset(start, goal, moveStartToGoal);
-                            phase = Phase.MoveStartToGoal;
+                            phase.value = Phase.MoveStartToGoal;
                         }
                     }
+
                     case MoveStartToGoal -> {
-                        traj.update(dt);
+                        traj.update(dtSim);
                         targetEE = traj.position();
-                        ballState = BallState.Attached;
+                        ballState.value = BallState.Attached;
 
                         if (traj.finished()) {
-                            phase = Phase.PlaceAtGoal;
-                            timer = 0.0f;
+                            phase.value = Phase.PlaceAtGoal;
+                            timer.value = 0.0f;
                             targetEE.set(goal);
                         }
                     }
+
                     case PlaceAtGoal -> {
                         targetEE.set(goal);
 
-                        timer += dt;
-                        if (timer >= placeDuration) {
-                            ballState = BallState.AtGoal;
-                            timer = 0.0f;
+                        timer.value += dtSim;
+                        if (timer.value >= placeDuration) {
+                            ballState.value = BallState.AtGoal;
+                            timer.value = 0.0f;
                             traj.reset(goal, homeEE, returnToHome);
-                            phase = Phase.ReturnGoalToHome;
+                            phase.value = Phase.ReturnGoalToHome;
                         } else {
-                            ballState = BallState.Attached;
+                            ballState.value = BallState.Attached;
                         }
                     }
-                    case ReturnGoalToHome -> {
-                        ballState = BallState.AtGoal;
 
-                        traj.update(dt);
+                    case ReturnGoalToHome -> {
+                        ballState.value = BallState.AtGoal;
+
+                        traj.update(dtSim);
                         targetEE = traj.position();
 
-                        timer += dt;
+                        timer.value += dtSim; // time since place
                         if (traj.finished()) {
-                            phase = Phase.WaitAtHomeReset;
+                            phase.value = Phase.WaitAtHomeReset;
                         }
                     }
+
                     case WaitAtHomeReset -> {
                         targetEE.set(homeEE);
 
-                        timer += dt;
-                        if (timer >= resetWaitTotal) {
-                            ballState = BallState.AtStart;
+                        timer.value += dtSim;
+                        if (timer.value >= resetWaitTotal) {
+                            ballState.value = BallState.AtStart;
                             ballPos.set(start);
 
-                            timer = 0.0f;
+                            timer.value = 0.0f;
                             traj.reset(homeEE, start, moveHomeToStart);
-                            phase = Phase.MoveHomeToStart;
+                            phase.value = Phase.MoveHomeToStart;
                         } else {
-                            ballState = BallState.AtGoal;
+                            ballState.value = BallState.AtGoal;
                         }
                     }
+
                     default -> {}
                 }
 
+                // IK for current EE target
                 IKResult ikNow = arm.solveIK(targetEE, false);
                 if (!ikNow.reachable) {
-                    phase = Phase.Error;
-                    runtimeError = ikNow.message;
+                    phase.value = Phase.Error;
+                    runtimeError.value = ikNow.message;
                 } else {
                     qcmd.set(ikNow.q);
                 }
             }
 
-            // FK for rendering and tool approach direction
+            // FK for rendering + approach direction
             FKResult fk = arm.forwardKinematics(qcmd);
 
             Vec3f approach = Vec3f.sub(fk.ee, fk.joint2);
             approach = Vec3f.normalize(approach);
 
             // Ball position by state (always visible)
-            if (ballState == BallState.AtStart) {
+            if (ballState.value == BallState.AtStart) {
                 ballPos.set(start);
-            } else if (ballState == BallState.AtGoal) {
+            } else if (ballState.value == BallState.AtGoal) {
                 ballPos.set(goal);
             } else {
                 Vec3f mounted = Vec3f.add(fk.ee, Vec3f.scale(approach, 0.22f));
@@ -393,6 +414,7 @@ public final class Main {
             setVec(vBall, ballPos);
             vApproach.x(approach.x).y(approach.y).z(approach.z);
 
+            // ----- Draw -----
             BeginDrawing();
             ClearBackground(DrawUtils.rgba(10, 12, 16, 255));
 
@@ -414,18 +436,27 @@ public final class Main {
 
             DrawUtils.drawSuctionTool(vEE, vApproach);
 
-            // Ball (smaller + outline)
+            // Ball (outline)
             DrawSphere(vBall, ballRadius, RED);
             DrawSphereWires(vBall, ballRadius * 1.02f, 10, 10, RAYWHITE);
 
             EndMode3D();
 
+            // ----- Overlay status -----
             Overlay.OverlayStatus st = new Overlay.OverlayStatus();
-            st.startReachable = ikStart.reachable;
-            st.endReachable   = ikGoal.reachable;
-            st.errorText      = runtimeError;
 
-            st.phaseText = switch (phase) {
+            // When paused, show reachability for pending inputs (so user gets feedback before PLAY).
+            // When running, show reachability for active inputs.
+            if (paused) {
+                st.startReachable = ikStartPending.reachable;
+                st.endReachable   = ikGoalPending.reachable;
+            } else {
+                st.startReachable = arm.solveIK(start, false).reachable;
+                st.endReachable   = arm.solveIK(goal,  false).reachable;
+            }
+
+            String phaseText = switch (phase.value) {
+                case Idle            -> "Phase: IDLE (enter inputs, press PLAY)";
                 case MoveHomeToStart -> "Phase: HOME -> START";
                 case PickAtStart     -> "Phase: PICK at START";
                 case MoveStartToGoal -> "Phase: START -> GOAL (ball attached)";
@@ -434,12 +465,69 @@ public final class Main {
                 case WaitAtHomeReset -> "Phase: WAIT then LOOP";
                 case Error           -> "Phase: ERROR";
             };
+            st.phaseText = paused ? (phaseText + "  [PAUSED]") : phaseText;
 
-            if (phase == Phase.Error && runtimeError == null) {
-                st.errorText = "ERROR: HOME/START/GOAL invalid or out of reach (z>=0 required).";
+            // Error message priority:
+            // - runtime errors while running
+            // - input parse/reach errors while paused
+            if (!paused && phase.value == Phase.Error) {
+                st.errorText = (runtimeError.value != null) ? runtimeError.value
+                        : "ERROR: HOME/START/GOAL invalid or out of reach (z>=0 required).";
+            } else if (paused) {
+                // Only show something if there is a real problem
+                if (!pendingStartOk) st.errorText = "START format invalid. Use: x y z   (z>=0)";
+                else if (!pendingGoalOk) st.errorText = "GOAL format invalid. Use: x y z   (z>=0)";
+                else if (!ikStartPending.reachable) st.errorText = "START not reachable: " + ikStartPending.message;
+                else if (!ikGoalPending.reachable) st.errorText = "GOAL not reachable: " + ikGoalPending.message;
+                else st.errorText = null;
+            } else {
+                st.errorText = null;
             }
 
-            paused = Overlay.drawOverlayPanel(uiFont, arm, start, goal, st, paused, screenW, screenH);
+            // Overlay returns an action event (Main applies it)
+            Overlay.Action action = Overlay.drawOverlayPanel(
+                    uiFont, arm, start, goal, input, st, paused, screenW, screenH
+            );
+
+            if (action == Overlay.Action.PAUSE_PRESSED) {
+                paused = true;
+                phase.value = Phase.Idle; // freeze and wait for new PLAY
+                runtimeError.value = null;
+
+                // Snap arm back to HOME pose visually while paused (consistent "start from home")
+                IKResult ikHome = arm.solveIK(homeEE, false);
+                if (ikHome.reachable) {
+                    qcmd.set(ikHome.q);
+                    targetEE.set(homeEE);
+                }
+                ballState.value = BallState.AtStart;
+                ballPos.set(start);
+            }
+
+            if (action == Overlay.Action.PLAY_PRESSED) {
+                // Validate pending inputs and apply
+                if (pendingStartOk && pendingGoalOk && ikStartPending.reachable && ikGoalPending.reachable) {
+                    // Apply new active targets
+                    start.set(pendingStart);
+                    goal.set(pendingGoal);
+
+                    // Restart sim from HOME using active targets
+                    restartFromHome(
+                            arm, homeEE, start, goal, qcmd, traj, moveHomeToStart,
+                            phase, timer, ballState, targetEE, runtimeError
+                    );
+
+                    // Only unpause if restart succeeded
+                    if (phase.value != Phase.Error) {
+                        paused = false;
+                    } else {
+                        paused = true;
+                    }
+                } else {
+                    // Keep paused; st.errorText already explains why
+                    paused = true;
+                }
+            }
 
             DrawUtils.drawTextSmall(uiFont, "F11: fullscreen   Mouse Wheel: zoom", 12, screenH - 28, 18,
                     DrawUtils.rgba(200,200,200,220));
