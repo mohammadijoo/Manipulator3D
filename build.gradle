@@ -1,0 +1,23 @@
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // JNI bindings for raylib 5.5 (includes platform natives)
+    implementation 'uk.co.electronstudio.jaylib:jaylib:5.5.+'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+application {
+    mainClass = 'manipulator3d.Main'
+    // On macOS you may need to add: -XstartOnFirstThread (see README)
+}
