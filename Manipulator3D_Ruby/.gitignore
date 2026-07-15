@@ -1,0 +1,19 @@
+# Ruby
+/.bundle/
+/vendor/bundle/
+/*.gem
+/.ruby-lsp/
+/.rubocop-*
+/Gemfile.lock
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# raylib screenshots
+*.png

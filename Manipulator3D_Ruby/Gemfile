@@ -1,0 +1,5 @@
+source "https://rubygems.org"
+
+# Cross-platform raylib + raymath bindings (FFI-based, prebuilt native libs for common platforms).
+# Docs: https://www.rubydoc.info/gems/raylib-bindings
+gem "raylib-bindings", "~> 0.7.17"

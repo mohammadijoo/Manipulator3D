@@ -1,0 +1,12 @@
+# Binaries
+Manipulator3D
+Manipulator3D.exe
+*.exe
+*.out
+
+# Build cache
+/build/
+*.log
+
+# Go
+**/go.sum

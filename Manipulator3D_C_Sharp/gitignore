@@ -1,0 +1,58 @@
+# ------------------------------------------------------------
+# Manipulator3D (C#) - Git ignore
+# Visual Studio 2022 + .NET
+# ------------------------------------------------------------
+
+# Build output
+bin/
+obj/
+
+# Visual Studio / VS Code / Rider
+.vs/
+.vscode/
+.idea/
+
+# User-specific files
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# MSBuild / NuGet artifacts
+*.cache
+*.pdb
+*.mdb
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Test results / coverage
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+*.opencover.xml
+
+# Logs
+*.log
+
+# OS junk
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Editor / temp files
+*.swp
+*.tmp
+*.temp
+*.bak
+*~
+
+# Publish output (if you use dotnet publish)
+publish/

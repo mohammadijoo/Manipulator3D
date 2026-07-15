@@ -1,0 +1,67 @@
+# =========================
+# Julia
+# =========================
+/Manifest.toml
+*.ji
+*.cov
+*.mem
+*.prof
+*.so
+*.dylib
+*.dll
+
+# Julia package/dev artifacts
+/.julia/
+**/.julia/
+
+# =========================
+# Build / cache outputs
+# =========================
+/build/
+/dist/
+/out/
+/bin/
+/obj/
+/logs/
+/tmp/
+/temp/
+/cache/
+/artifacts/
+
+# =========================
+# Raylib / native caches (if any)
+# =========================
+*.pdb
+*.exp
+*.lib
+*.ilk
+
+# =========================
+# OS / editor
+# =========================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.vscode/
+.idea/
+*.code-workspace
+
+# =========================
+# Windows / PowerShell
+# =========================
+*.lnk
+*.stackdump
+
+# =========================
+# Python/venv (in case you tested scripts)
+# =========================
+.venv/
+venv/
+__pycache__/
+
+# =========================
+# Optional: keep fonts, ignore generated copies
+# =========================
+# (Do NOT ignore your actual shipped font file if you want it in the repo)
+# resources/fonts/*.ttf

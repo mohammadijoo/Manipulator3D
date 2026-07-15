@@ -1,0 +1,9 @@
+name = "Manipulator3D"
+uuid = "dee96cd2-d89e-4b0a-92e2-3d99c3642e2a"
+version = "0.1.0"
+
+[deps]
+Raylib = "681baf3e-1d1e-48c9-b5e5-b1aea2d6d4d9"
+ColorTypes = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
+FixedPointNumbers = "53c48c17-4a7d-5ca2-90c5-79b7896eea93"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"

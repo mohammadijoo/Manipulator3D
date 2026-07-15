@@ -1,0 +1,12 @@
+# sbt
+target/
+project/target/
+project/project/
+
+# IntelliJ
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
